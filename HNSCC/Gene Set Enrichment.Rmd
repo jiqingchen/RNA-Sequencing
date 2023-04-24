@@ -1,0 +1,248 @@
+---
+title: "Gene Set Enrichment"
+author: "Ji-Qing Chen"
+date: "2022-11-04"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(GO.db)
+library(reactome.db)
+library(GSEABase) # Doesn't actually contain anything but it has tools for manipulating the most common formatted of file for MSigDB objects
+
+library(msigdbr)
+library(ggplot2)
+
+library(org.Hs.eg.db)
+```
+
+# load Data
+```{r}
+load("/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/DGE.RData")
+```
+
+# Check hallmark gene sets of MSigDB gene set
+```{r}
+human_H <- msigdbr(species = "Homo sapiens", category = "H")
+head(human_H)
+```
+
+# Functional enrichment
+```{r}
+library(goseq)
+# The first method will test for any association of gene set with a group of interesting genes (differentially expressed genes): simple Fischer test like considering all differentially expressed genes and gene sets, and then consider how many differentially expressed genes are in that gene set
+
+# It is very comprehensive but underpowered
+
+# The goseq package requires a named vector of 1s or 0s indicating whether a gene is upregulated/downregulated.
+UpIn_Cisplatin <- sig_annotatedRes_Cisplatin$log2FoldChange > 0 # Fals and True
+UpIn_Cisplatin <- as.integer(UpIn_Cisplatin) # Fals and True  -- > 0 and 1
+names(UpIn_Cisplatin) <- sig_annotatedRes_Cisplatin$ENTREZID
+UpIn_Cisplatin[1:4]
+table(UpIn_Cisplatin)
+
+# Deal with potential length biases (big strength of goseq) in differential expression analysis and so can remove any artefactual enrichment for long and short genes. (For example, some genes are often shorter [have less introns] because they need to be expressed more so it allows for transcription to be faster [processed and delivered quicker]) --> bias the results of GO term analysis
+pwf_Cisplatin <- nullp(UpIn_Cisplatin, "hg38", "knownGene", plot.fit = TRUE) # assess any biases by evaluating the relationship between differential expression and length.
+# If there was no bias the line would be straight
+
+GO_UpIn_Cisplatin <- goseq(pwf_Cisplatin, "hg38", "knownGene", 
+                           test.cats = c("GO:BP"),
+                           use_genes_without_cat=TRUE) 
+# test.cats: the categories we wish to test (GO:BP, GO:MF, GO:CC, KEGG).
+# For 32 genes, we could not find any categories. To force their use, use_genes_without_cat=TRUE
+
+GO_UpIn_Cisplatin[1:3, ]
+# numDEInCat: the number that exists within the category
+write_csv(GO_UpIn_Cisplatin ,"/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/Analysis/DEG/Cisplatin_goseq.csv")
+
+# Retrieve the genes in the circulatory process (GO:0003013) functional group
+CirculatoryResponseGenes <- AnnotationDbi::select(org.Hs.eg.db, keytype = "GOALL", 
+                                                  keys = "GO:0003013",
+                                                  columns = "ENTREZID")
+CirculatoryResponseGenes
+
+# Filter our differential gene expression analysis table, with this GO set of Circulatory response genes. To see what are the specific genes that are driving this result.
+CRG_Entrez <- unique(CirculatoryResponseGenes$ENTREZID)
+CRG_Res <- sig_annotatedRes_Cisplatin[sig_annotatedRes_Cisplatin$ENTREZID %in% CRG_Entrez, ]
+#write.table(CRG_Res, file = "data/CirculatoryResponseGenesTable.csv", sep = ",", row.names = FALSE)
+CRG_Res[1:3, ]
+# So, you go from the differential gene expression analysis you find out which GO terms are enriched, then you can actually look back at your differential gene expression analysis at those specific GO terms.
+# You can do things like make heat maps of these GO terms.(common next step --> using rlog counts --> extract those gene information)
+# Or look at log2 fold change values of this gene set vs several other gene sets
+
+# Check other gene set
+```
+
+# plot function
+```{r}
+plot_pathway <- function(DF,TERM,yaxis1) {
+highchart() %>%
+            hc_add_series(data = DF$numInCat, yAxis =0, showInLegend = FALSE, type = "bar") %>%
+            hc_add_series(data = DF$numDEInCat, yAxis =1, showInLegend = FALSE, type = "bar") %>%
+            hc_add_series(data = -log10(DF$over_represented_pvalue), yAxis =2, showInLegend = FALSE) %>%
+            hc_yAxis_multiples(
+              list(lineWidth = 3, lineColor='#7cb5ec', title=list(text=yaxis1)),
+              list(lineWidth = 3, lineColor="#434348", title=list(text="Number of differentially expressed genes that are up regulated in the category")),
+              list(lineWidth = 3, lineColor="#90ed7d", title=list(text="-log10(p-value)"),
+                   labels = list(format = "{value}"), opposite = TRUE)
+            ) %>%
+           hc_xAxis(categories = TERM)
+}
+```
+
+# plot
+```{r}
+# plot 800 x 500
+GO_UpIn_Cisplatin2 <- GO_UpIn_Cisplatin[1:10,]
+Cisplatin_GO <- plot_pathway(DF = GO_UpIn_Cisplatin2, TERM = GO_UpIn_Cisplatin2$term, yaxis1 = "Number of genes in the GO:BP category")
+```
+
+# Radiation
+```{r}
+UpIn_Radiation <- sig_annotatedRes_Radiation$log2FoldChange > 0 # Fals and True
+UpIn_Radiation <- as.integer(UpIn_Radiation) # Fals and True  -- > 0 and 1
+names(UpIn_Radiation) <- sig_annotatedRes_Radiation$ENTREZID
+
+pwf_Radiation <- nullp(UpIn_Radiation, "hg38", "knownGene", plot.fit = TRUE) 
+
+GO_UpIn_Radiation <- goseq(pwf_Radiation, "hg38", "knownGene", 
+                           test.cats = c("GO:BP"),
+                           use_genes_without_cat=TRUE)
+write_csv(GO_UpIn_Radiation ,"/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/Analysis/DEG/Radiation_goseq.csv")
+
+GO_UpIn_Radiation2 <- GO_UpIn_Radiation[1:10,]
+Radiation_GO <- plot_pathway(DF = GO_UpIn_Radiation2, TERM = GO_UpIn_Radiation2$term, yaxis1 = "Number of genes in the GO:BP category")
+```
+
+# CRT
+```{r}
+UpIn_CRT <- sig_annotatedRes_CRT$log2FoldChange > 0 # Fals and True
+UpIn_CRT <- as.integer(UpIn_CRT) # Fals and True  -- > 0 and 1
+names(UpIn_CRT) <- sig_annotatedRes_CRT$ENTREZID
+
+pwf_CRT <- nullp(UpIn_CRT, "hg38", "knownGene", plot.fit = TRUE) 
+
+GO_UpIn_CRT <- goseq(pwf_CRT, "hg38", "knownGene", 
+                     test.cats = c("GO:BP"),
+                     use_genes_without_cat=TRUE)
+write_csv(GO_UpIn_CRT ,"/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/Analysis/DEG/CRT_goseq.csv")
+
+GO_UpIn_CRT2 <- GO_UpIn_CRT[1:10,]
+CRT_GO <- plot_pathway(DF = GO_UpIn_CRT2, TERM = GO_UpIn_CRT2$term, yaxis1 = "Number of genes in the GO:BP category")
+```
+
+#################################################################################
+
+# ClusterProfiler
+```{r}
+# It provides multiple enrichment functions that work with curated gene sets (e.g. GO, KEGG) or custom gene sets. 
+# It can perform both GSA and GSEA approaches
+library(clusterProfiler)
+library(enrichplot)
+
+# enrichGO(): For a simple functional enrichment of GO terms, just provide this a vector of gene IDs you want to check, and the Org.db of the relevant organism.
+# enrichKEGG(): for KEGG gene sets
+# enrichr(): for any user provided gene sets (ex. MSigDB)
+
+sig_genes_Radiation <- sig_annotatedRes_Radiation[sig_annotatedRes_Radiation$padj < 0.05, 1]
+head(sig_genes_Radiation)
+
+sig_gene_enr_Radiation <- enrichGO(sig_genes_Radiation, OrgDb = org.Hs.eg.db)
+sig_gene_enr_Radiation
+
+clusterProfiler::dotplot(sig_gene_enr_Radiation) + theme(axis.text.y = element_text(size = 7))
+# x-axis: gene ratio that is what proportion of the gene set are these significant genes.
+# It is organized by gene ratio.
+
+# Enrichment maps: show how the significant groups in the gene sets relate to each other. (Often gene sets you find are significant actually have a lot of overlapping genes)
+sig_gene_enr_Radiation2 <- pairwise_termsim(sig_gene_enr_Radiation)
+emapplot(sig_gene_enr_Radiation2, showCategory = 15, cex_label_category = 0.6) + theme(text = element_text(size = 7))
+# The thickness of the line corresponds to how many genes are overlapping between gene sets.
+```
+
+#################################################################################
+
+# GSEA
+```{r}
+# The third method will test for any association of gene set with the ranking of "all" genes (ranked by measure of differential expression) --> it focus on a ranked list --> it could be log2 fold change (lfc) that has been shrunk and it's been ordered by that --> Is there an association of gene set with all at the top of the ranking or the bottom of the ranking.
+
+# It allows you to leverage the whole data set. The previous analysis relies on having a cut-off / threshold of 0.05 (padj). But there could lots of useful gene set information at 0.06 or higher; there could be extra things that may have pushed it over if we did for whatever value.
+
+# It is important to do the lfc shrinkage because you don't want the genes that are ranked high to be ones that aren't significant and you want to down weight the ones that are not significant because they probably have a big log2 fold change that are just through chance. You want to sure you're confident at the top of your list.
+
+# GSEA tests whether the gene set is correlated with the ranking of genes by our differential expression analysis metric using a modified KS-test.
+
+
+
+# Produce a ranked and named vector of gene scores. We will rank by stat column to give sensible measure of differential expression. We could also use log2FoldChange column if we have modified log2 fold changes using lfsShrink() function.
+forRNK_Cisplatin <- annotatedRes_Cisplatin$stat
+names(forRNK_Cisplatin) <- annotatedRes_Cisplatin$ENTREZID
+forRNK_Cisplatin <- forRNK_Cisplatin[order(forRNK_Cisplatin, decreasing = T)]
+forRNK_Cisplatin[1:6]
+# Generate gene sets info. (geneset names and gene IDs)
+Hs_H <- msigdbr(species = "Homo sapiens", category = "H")[, c("gs_name", "entrez_gene")]
+head(Hs_H)
+# Run GSEA
+sig_gene_enr_Cisplatin_H <- GSEA(forRNK_Cisplatin, TERM2GENE = Hs_H, eps = 1e-100) # eps: cut-off, so above a certain value, it will stop reporting higher significance of scores
+sig_gene_enr_Cisplatin_H_DF <- as.data.frame(sig_gene_enr_Cisplatin_H@result)
+write_csv(sig_gene_enr_Cisplatin_H_DF ,"/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/Analysis/DEG/Cisplatin_GSEA.csv")
+
+# Dot plot
+clusterProfiler::dotplot(sig_gene_enr_Cisplatin_H, showCategory = 10) + theme(axis.text.y = element_text(size = 7)) # 1000 x 400
+
+# Enrichment maps
+sig_gene_enr_Cisplatin_H2 <- pairwise_termsim(sig_gene_enr_Cisplatin_H)
+emapplot(sig_gene_enr_Cisplatin_H2, showCategory = 10, cex_label_category = 0.6) + theme(text = element_text(size = 7)) # 600 x 600
+
+# Running Score plot. These are plotted for individual gene sets. here we are looking at the most significant group
+gseaplot(sig_gene_enr_Cisplatin_H2, geneSetID = 1, by = "runningScore", title = "HALLMARK_KRAS_SIGNALING_DN") # 800 x 600
+# Maximum deviation from zero provides the enrichment score ES(S). Every gene that is in your gene set of interest that is before ES is considered to be "leading edge"
+```
+
+# GSEA - Radiation
+```{r}
+forRNK_Radiation <- annotatedRes_Radiation$stat
+names(forRNK_Radiation) <- annotatedRes_Radiation$ENTREZID
+forRNK_Radiation <- forRNK_Radiation[order(forRNK_Radiation, decreasing = T)]
+
+Hs_H <- msigdbr(species = "Homo sapiens", category = "H")[, c("gs_name", "entrez_gene")]
+
+sig_gene_enr_Radiation_H <- GSEA(forRNK_Radiation, TERM2GENE = Hs_H, eps = 1e-100)
+sig_gene_enr_Radiation_H_DF <- as.data.frame(sig_gene_enr_Radiation_H@result)
+write_csv(sig_gene_enr_Radiation_H_DF ,"/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/Analysis/DEG/Radiation_GSEA.csv")
+
+# Dot plot
+clusterProfiler::dotplot(sig_gene_enr_Radiation_H, showCategory = 10) + theme(axis.text.y = element_text(size = 7)) # 1000 x 400
+
+# Enrichment maps
+sig_gene_enr_Radiation_H2 <- pairwise_termsim(sig_gene_enr_Radiation_H)
+emapplot(sig_gene_enr_Radiation_H2, showCategory = 10, cex_label_category = 0.6) + theme(text = element_text(size = 7)) # 600 x 600
+
+# Running Score plot.
+gseaplot(sig_gene_enr_Radiation_H2, geneSetID = 1, by = "runningScore", title = "HALLMARK_MYC_TARGETS_V1") # 800 x 600
+```
+
+# GSEA - CRT
+```{r}
+forRNK_CRT <- annotatedRes_CRT$stat
+names(forRNK_CRT) <- annotatedRes_CRT$ENTREZID
+forRNK_CRT <- forRNK_CRT[order(forRNK_CRT, decreasing = T)]
+
+Hs_H <- msigdbr(species = "Homo sapiens", category = "H")[, c("gs_name", "entrez_gene")]
+
+sig_gene_enr_CRT_H <- GSEA(forRNK_CRT, TERM2GENE = Hs_H, eps = 1e-100)
+sig_gene_enr_CRT_H_DF <- as.data.frame(sig_gene_enr_CRT_H@result)
+write_csv(sig_gene_enr_CRT_H_DF ,"/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/Analysis/DEG/CRT_GSEA.csv")
+
+# Dot plot
+clusterProfiler::dotplot(sig_gene_enr_CRT_H, showCategory = 10) + theme(axis.text.y = element_text(size = 7)) # 1000 x 400
+
+# Enrichment maps
+sig_gene_enr_CRT_H2 <- pairwise_termsim(sig_gene_enr_CRT_H)
+emapplot(sig_gene_enr_CRT_H2, showCategory = 10, cex_label_category = 0.6) + theme(text = element_text(size = 7)) # 600 x 600
+
+# Running Score plot.
+gseaplot(sig_gene_enr_CRT_H2, geneSetID = 1, by = "runningScore", title = "HALLMARK_UV_RESPONSE_UP") # 800 x 600
+```
+

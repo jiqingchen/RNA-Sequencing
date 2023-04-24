@@ -1,0 +1,187 @@
+---
+title: "RNA-seq pre-processing"
+author: "Ji-Qing Chen"
+date: "2022-10-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(Rfastp)
+```
+
+# Set directory
+```{r}
+setwd("/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/RNA-seq_raw_Data/RS-03517990_18243") # do it at console
+```
+
+# basic QC and filter out low quality reads or trim --> using Rfastp.
+```{r}
+# create a report in R 
+json_report <- rfastp(read1 = "/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/RNA-seq_raw_Data/RS-03517990_18243/RS-03517990_18243-ORGANOID-RNA-1_RS-03501927_S2_R1_001.fastq.gz", outputFastq = "RS-03517990_rfastp")
+# [create following filea in the directory:
+# -- xx_R1.fastq.gz: FASTQ with poor quality reads filtered out
+# -- xx.html: HTML file contains a QC report
+# -- xx.json: JSON file with all the summary statistics
+# If you want to use specific adapters or quality thresholds --> ?rfastp; if you have paired end, use read2
+
+# Details before and after QC
+qcSummary(json_report)
+curvePlot(json_report) # base quality per base
+curvePlot(json_report, curves = "content_curves") # shows gc content per base
+## You don't want massive changes after filtering --> so should not have a massive shift
+```
+______________________________________________________
+# Aligning
+### Not all RNAseq reads will align continuously against our reference genome. Instead they will map across splice junctions, so we need to use splice aware aligners (subjunc algorithm; This means it will detect reads that span introns.)
+### Create a BAM file which contains all the information in the fastq file and position information
+
+# Creating a reference genome
+```{r}
+# Create the index [a version of the genome that has been optimized for the searching - speed up the alignment compared to use the raw sequence]
+# First, retrieve the sequence information for the genome of interest in FASTA format. Use the BSgenome libraries to retrieve the full sequence information.
+library(BSgenome.Hsapiens.UCSC.hg38)
+BSgenome.Hsapiens.UCSC.hg38
+BSgenome.Hsapiens.UCSC.hg38[["chr1"]] # DNA string object is the entire sequence of chromosome 1
+
+# Extract information to build a reference genome (only use the major chromosomes for analysis so we may exclude random and unplaced contigs. Cycle through the major chromosomes and create a DNAStringSet object from the retrieved sequences.)
+mainChromosomes <- paste0("chr", c(1:22, "X", "Y", "M")) # M: mitochondria
+mainChrSeq <- lapply(mainChromosomes, function(x) BSgenome.Hsapiens.UCSC.hg38[[x]]) # extract out the chromosome sequence information associated with each chromosome
+names(mainChrSeq) <- mainChromosomes
+mainChrSeqSet <- DNAStringSet(mainChrSeq) # convert it into the specialist object (DNAStringSet)
+mainChrSeqSet
+
+# Use the writeXStringSet to create our FASTA file of sequences to align to.
+writeXStringSet(mainChrSeqSet, "BSgenome.Hsapiens.UCSC.hg38.mainChrs.fa")
+```
+
+# Create an Rsubread index that is appropriate for the Rsubread and subjunc algorithm (so not use a bowtie index)
+```{r}
+# Building an index is memory intensive and by default is set to 8GB and take overnight in personal computer. But you just need to do it once
+library(Rsubread)
+
+# Do it at Discovery
+buildindex("hg38_mainchrs", "BSgenome.Hsapiens.UCSC.hg38.mainChrs.fa", memory = 8000,
+    indexSplit = TRUE)
+
+# bowtie and bowtie II are designed for genomic so they don't consider splicing
+```
+
+
+################### only for using external annotation in alignment ################
+
+# To capture non-canonical splice sites, provide a SAF or GTF [annotation information: known exons introns and where they are] to Rsubread call.
+```{r}
+# SAF format is used by Rsubread to hold feature information (exons' chromosome locations (chromosome,start,end,strand) and a feature/metafeature ID., how do they related to each other-- which gene which transcript do they belong to).
+
+# Build SAF file
+library(TxDb.Hsapiens.UCSC.hg38.knownGene) # transcript database
+
+# exons(): retrieve exon locations and their gene ids
+myExons <- exons(TxDb.Hsapiens.UCSC.hg38.knownGene, columns = c("tx_id", "gene_id")) # tx_id: transcript ID
+
+# select only exons which are annotated to exactly 1 gene.
+myExons <- myExons[lengths(myExons$gene_id) == 1]
+myExons
+
+# Export exon object (exons GRanges) into data.frame of SAF format for Rsubread
+dfExons <- as.data.frame(myExons)
+SAF <- data.frame(GeneID = dfExons$gene_id, Chr = dfExons$seqnames, Start = dfExons$start, End = dfExons$end, Strand = dfExons$strand)
+SAF <- dfExons %>%
+       dplyr::select(gene_id, seqnames, start, end, strand) %>%
+       `colnames<-`(c("GeneID","Chr","Start","End","Strand"))
+```
+
+####################################################################################
+
+# RNA alignment with in-built annotation
+```{r}
+library(Rsubread)
+
+# Subjunc is an RNA-seq aligner and it reports full alignment of each read
+myMapped <- subjunc("hg38.mainChrs",
+                    "/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/RNA-seq_raw_Data/RS-03517990_18243/RS-03517990_rfastp_R1.fastq.gz", 
+                    output_format = "BAM",
+                    output_file = "RS-03517990_QC_hg38.bam", 
+                    useAnnotation = TRUE, 
+                    annot.inbuilt = "hg38", 
+                    isGTF = FALSE,
+                    nthreads = 4)
+
+# The align() function can align both DNA and RNA sequencing reads and reports partial alignment for exon spanning reads.
+```
+
+# Sort and index reads
+```{r}
+library(Rsamtools)
+
+# Organize bam to make it easy to use in external programs such as IGV or downstream analysis in R
+sortBam("/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/RNA-seq_raw_Data/RS-03517990_18243/RS-03517990_QC_hg38.bam", "/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/RNA-seq_raw_Data/RS-03517990_18243/Sorted_RS-03517990_QC_hg38")
+
+# Another reference file
+indexBam("/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/RNA-seq_raw_Data/RS-03517990_18243/Sorted_RS-03517990_QC_hg38.bam")
+```
+
+# Counting with aligned RNAseq Data (one sample)
+```{r}
+# gather gene models of exons and splice junctions
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+geneExons <- exonsBy(TxDb.Hsapiens.UCSC.hg38.knownGene, by = "gene") # exonsBy() extract out all the information about where we want to count because we get all the exons and its ordered by gene
+class(geneExons)
+geneExons[1:2]
+
+library(GenomicAlignments)
+# BamFile(): specify a BamFile object; specify the yieldSize parameter to 10000 to control memory footprint 
+# yieldSize = 10000: read in 10000 reads at once. If you don't have a high memory computer you can lower this number.
+myBam <- BamFile("/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/RS-03517989/Sorted_RS_03517989_QC_hg38.bam", yieldSize = 10000)
+# you can put multiple bams at once (as a list) in the first argument
+
+# use the summarizeOverlaps() to count the reads in our BAM that overlap genes.
+GeneCounts <- summarizeOverlaps(geneExons, myBam, ignore.strand = TRUE)
+GeneCounts # RangedSummarizedExperiment object containing our counts and GRanges object.
+# dim: how many different genes that we are counting
+# assay: count style
+# rownames: each of gene ids
+# colnames: bam files that we provided
+
+save(GeneCounts, file = "/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/RS-03517989/RS_03517989_geneCounts.RData")
+```
+
+# Counting with aligned RNAseq Data (multiple samples)
+```{r}
+# gather gene models of exons and splice junctions
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+geneExons <- exonsBy(TxDb.Hsapiens.UCSC.hg38.knownGene, by = "gene") # exonsBy() extract out all the information about where we want to count because we get all the exons and its ordered by gene
+class(geneExons)
+geneExons[1:2]
+
+# create a BamFileList
+library(Rsamtools)
+bamFilesToCount <- c("/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/RNA-seq_raw_Data/RS-03517990_18243/Sorted_RS-03517990_QC_hg38.bam", "/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/RNA-seq_raw_Data/RS-03517994_RS4548/Sorted_RS-03517994_QC_hg38.bam", "/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/RNA-seq_raw_Data/RS-03517992_RS5650/Sorted_RS-03517992_QC_hg38.bam", "/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/RNA-seq_raw_Data/RS-03517999_PT00355043/Sorted_RS-03517999_QC_hg38.bam", "/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/RNA-seq_raw_Data/RS-03517998_PT00190160/Sorted_RS-03517998_QC_hg38.bam", "/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/RNA-seq_raw_Data/RS-03517997_PT00405348/Sorted_RS-03517997_QC_hg38.bam")
+
+names(bamFilesToCount) <- c("18243_PDO", "RS4548_PDO", "RS5650_PDO", "RS5650_Tumor", "18243_Tumor", "RS4548_Tumor")
+
+library(GenomicAlignments)
+# BamFile(): specify a BamFile object; specify the yieldSize parameter to 10000 to control memory footprint 
+# yieldSize = 10000: read in 10000 reads at once. If you don't have a high memory computer you can lower this number.
+myBam <- BamFileList(bamFilesToCount, yieldSize = 10000)
+# you can put multiple bams at once (as a list) in the first argument
+
+# use the summarizeOverlaps() to count the reads in our BAM that overlap genes.
+GeneCounts <- summarizeOverlaps(geneExons, myBam, ignore.strand = TRUE)
+GeneCounts # RangedSummarizedExperiment object containing our counts and GRanges object.
+# dim: how many different genes that we are counting
+# assay: count style
+# rownames: each of gene ids
+# colnames: bam files that we provided
+
+save(GeneCounts, file = "/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/PDO_vs_TumorTissue/geneCounts.RData")
+```
+
+# review counts from gene-level.
+```{r}
+# retrieve a matrix of counts from either RangedSummarizedExperiment object using the assay() function.
+geneCounts <- assay(GeneCounts)
+head(geneCounts)
+```
+

@@ -1,0 +1,444 @@
+---
+title: "Data Visualization"
+author: "Ji-Qing Chen"
+date: "2022-10-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(org.Hs.eg.db)
+library(tidyr)
+library(DESeq2)
+```
+
+# Load data
+```{r}
+load("/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/PDO_drug_resistance/DGE.RData")
+load("/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/phenotype.RData")
+phenotype_Cisplatin <- phenotype %>% dplyr::select(Cisplatin)
+phenotype_Radiation <- phenotype %>% dplyr::select(Radiation)
+phenotype_CRT <- phenotype %>% dplyr::select(CRT)
+```
+
+# Transform the integer count data to log2 scale because the variation between genes is large. (Need to add some artificial value (pseudocount) to zeros since the log2 of zero is infinite)
+```{r}
+normLog2Counts_Cisplatin <- normTransform(dds_Cisplatin) # normTransform() will add a 1 to normalized counts prior to log2 transform
+normLog2Counts_Cisplatin # DESeqTransform object
+
+# Extract normalized and transformed counts
+matrixOfNorm_Cisplatin <- assay(normLog2Counts_Cisplatin)
+boxplot(matrixOfNorm_Cisplatin, las = 2) # consistent between all of samples because it is genome-wide visualization
+```
+
+# Standard deviation versus the mean expression
+```{r}
+library(vsn)
+vsn::meanSdPlot(matrixOfNorm_Cisplatin) # smaller counts having higher variance. Small counts have more influence over how you visualize things or if you do subsequent clustering they  can have a stronger effect.
+```
+
+# Use rlog transformation to deal with "smaller counts having higher variance".
+```{r}
+# it does a log2 but it also does variance stabilization of low-end genes (shrink the variance for genes with low level counts based on their mean expression)
+rlog_Cisplatin <- rlog(dds_Cisplatin)
+rlog_Cisplatin
+
+# plot the mean/variance relationship
+rlogMatrix_Cisplatin <- assay(rlog_Cisplatin) # extract the matrix of transformed counts
+vsn::meanSdPlot(rlogMatrix_Cisplatin) # If we look at the axis we can see the shrinkage of variance for low count genes.
+```
+
+#################################################################################
+
+# Dimension reduction (PCA)
+```{r}
+# Simplify to a few dimensions or meta/eigen genes which represent major patterns of signal across samples found.
+plotPCA(rlog_Cisplatin, intgroup = "Cisplatin", ntop = nrow(rlog_Cisplatin)) # 1000 x 800
+# ntop: how many genes it considers; ntop = nrow(rlog_Cisplatin) --> PCA of the entire data set. Default: top 500 genes that are contributing most to the patterns observed in the data.
+# PC1 and PC2 only account for 46% of the variation
+# Genes driving that predominantly responsible for PC1 are not likely to be the ones also driving PC2 
+# Every gene contributes to a certain amount either positively or negatively to a specific PC
+
+pcRes <- prcomp(t(rlogMatrix_Cisplatin))
+class(pcRes)
+pcRes$x[1:2, ] # number is the coordinates that we used in the plot
+
+# The influence (rotation/loadings) for all genes to each PC
+pcRes$rotation[1:5, 1:4]
+
+# which genes most positively contribute to PC1.
+PC1markers <- sort(pcRes$rotation[, 1], decreasing = TRUE)[1:100] # top 100 markers
+PC1markers[1:10]
+
+# Extract info. from PC1markers
+PC1markersDF <- as.data.frame(PC1markers)
+eToSym_Cisplatin <- AnnotationDbi::select(org.Hs.eg.db,
+                                          keys = rownames(PC1markersDF),
+                                          keytype = "ENTREZID",
+                                          columns="SYMBOL")
+PC1markersDF <- PC1markersDF %>% 
+                `colnames<-`("Weight_for_PC1") %>%
+                rownames_to_column(var = "ENTREZID") %>%
+                left_join(eToSym_Cisplatin) %>%
+                select(ENTREZID, Gene = SYMBOL, Weight_for_PC1)
+write_csv(PC1markersDF ,"/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/Analysis/DEG/Cisplatin_PC1_topMarkers.csv")
+```
+
+# PCA-Radiation
+```{r}
+rlog_Radiation <- rlog(dds_Radiation)
+rlogMatrix_Radiation <- assay(rlog_Radiation)
+
+# Simplify to a few dimensions or meta/eigen genes which represent major patterns of signal across samples found.
+plotPCA(rlog_Radiation, intgroup = "Radiation", ntop = nrow(rlog_Radiation)) # 1000 x 800
+# ntop: how many genes it considers; ntop = nrow(rlog_Cisplatin) --> PCA of the entire data set. Default: top 500 genes that are contributing most to the patterns observed in the data.
+# PC1 and PC2 only account for 46% of the variation
+# Genes driving that predominantly responsible for PC1 are not likely to be the ones also driving PC2 
+# Every gene contributes to a certain amount either positively or negatively to a specific PC
+
+pcRes <- prcomp(t(rlogMatrix_Radiation))
+class(pcRes)
+pcRes$x[1:2, ] # number is the coordinates that we used in the plot
+
+# The influence (rotation/loadings) for all genes to each PC
+pcRes$rotation[1:5, 1:4]
+
+# which genes most positively contribute to PC1.
+PC1markers <- sort(pcRes$rotation[, 1], decreasing = TRUE)[1:100] # top 100 markers
+PC1markers[1:10]
+
+# Extract info. from PC1markers
+PC1markersDF <- as.data.frame(PC1markers)
+eToSym_Radiation <- AnnotationDbi::select(org.Hs.eg.db,
+                                          keys = rownames(PC1markersDF),
+                                          keytype = "ENTREZID",
+                                          columns="SYMBOL")
+PC1markersDF <- PC1markersDF %>% 
+                `colnames<-`("Weight_for_PC1") %>%
+                rownames_to_column(var = "ENTREZID") %>%
+                left_join(eToSym_Radiation) %>%
+                select(ENTREZID, Gene = SYMBOL, Weight_for_PC1)
+write_csv(PC1markersDF ,"/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/Analysis/DEG/Radiation_PC1_topMarkers.csv")
+```
+
+# PCA-CRT
+```{r}
+rlog_CRT <- rlog(dds_CRT)
+rlogMatrix_CRT <- assay(rlog_CRT)
+
+# Simplify to a few dimensions or meta/eigen genes which represent major patterns of signal across samples found.
+plotPCA(rlog_CRT, intgroup = "CRT", ntop = nrow(rlog_CRT)) # 1000 x 800
+# ntop: how many genes it considers; ntop = nrow(rlog_Cisplatin) --> PCA of the entire data set. Default: top 500 genes that are contributing most to the patterns observed in the data.
+# PC1 and PC2 only account for 46% of the variation
+# Genes driving that predominantly responsible for PC1 are not likely to be the ones also driving PC2 
+# Every gene contributes to a certain amount either positively or negatively to a specific PC
+
+pcRes <- prcomp(t(rlogMatrix_CRT))
+class(pcRes)
+pcRes$x[1:2, ] # number is the coordinates that we used in the plot
+
+# The influence (rotation/loadings) for all genes to each PC
+pcRes$rotation[1:5, 1:4]
+
+# which genes most positively contribute to PC1.
+PC1markers <- sort(pcRes$rotation[, 1], decreasing = TRUE)[1:100] # top 100 markers
+PC1markers[1:10]
+
+# Extract info. from PC1markers
+PC1markersDF <- as.data.frame(PC1markers)
+eToSym_CRT <- AnnotationDbi::select(org.Hs.eg.db,
+                                    keys = rownames(PC1markersDF),
+                                    keytype = "ENTREZID",
+                                    columns="SYMBOL")
+PC1markersDF <- PC1markersDF %>% 
+                `colnames<-`("Weight_for_PC1") %>%
+                rownames_to_column(var = "ENTREZID") %>%
+                left_join(eToSym_CRT) %>%
+                select(ENTREZID, Gene = SYMBOL, Weight_for_PC1)
+write_csv(PC1markersDF ,"/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/Analysis/DEG/CRT_PC1_topMarkers.csv")
+```
+
+# Investigate the gene expression profiles associated with PC1
+```{r}
+# plot the log2 foldchanges (or directional statistics) from pairwise comparisons for PC1 most influential genes
+myRes_Cisplatin <- results(dds_Cisplatin, contrast = c("Cisplatin", "Cisplatin_Resistant", "Cisplatin_Sensitive"))
+myRes_Radiation <- results(dds_Radiation, contrast = c("Radiation", "Radiation_Resistant", "Radiation_Sensitive"))
+myRes_CRT <- results(dds_CRT, contrast = c("CRT", "CRT_Resistant", "CRT_Sensitive"))
+
+# Extract out genes that drives the PC analysis
+PC1_Cisplatin <- myRes_Cisplatin$stat[rownames(myRes_Cisplatin) %in% names(PC1markers)] # myRes_Cisplatin$stat: directional statistics out of the log2 fold change
+PC1_Radiation <- myRes_Radiation$stat[rownames(myRes_Radiation) %in% names(PC1markers)]
+PC1_CRT <- myRes_CRT$stat[rownames(myRes_CRT) %in% names(PC1markers)]
+
+boxplot(PC1_Cisplatin, PC1_Radiation, PC1_CRT, names = c("Cisplatin", "Radiation", "CRT"), ylab = "log2FC")
+# the top100 genes are all specifically up-regulated in Cisplatin Resistant.
+```
+
+#################################################################################
+
+# Assess the correlation between expression profiles of samples
+```{r}
+# Is group Cisplatin_Resistant more similar to group Cisplatin_Sensitive?
+sampleCor_Cisplatin <- cor(rlogMatrix)
+sampleCor_Cisplatin
+
+## For visualizing
+# 1. Convert correlation matrix into a distance measure to be used in clustering by subtracting from 1 to give dissimilarity measure and converting with the as.dist() to a dist object.
+sampleDists_Cisplatin <- as.dist(1 - cor(rlogMatrix))
+
+# 2. Create a matrix of distance values to plot in the heatmap
+sampleDistMatrix_Cisplatin <- as.matrix(sampleDists_Cisplatin)
+
+library(pheatmap)
+library(RColorBrewer)
+blueColours <- brewer.pal(9, "Blues") # 9 different blues
+colors <- colorRampPalette(rev(blueColours))(255) # create the gradient (9 blues are divided into 255)
+plot(1:255, rep(1, 255), col = colors, pch = 20, cex = 20, ann = FALSE, yaxt = "n")
+
+pheatmap(sampleDistMatrix_Cisplatin, clustering_distance_rows = sampleDists_Cisplatin, clustering_distance_cols = sampleDists_Cisplatin, color = colors, annotation_col = phenotype_Cisplatin)
+# Blue: little distance from each other and tha means they are very similar
+```
+
+#################################################################################
+
+# Clustering Analysis
+
+# Minimizing the number of genes considered for clustering helps speed things up. (If you include all the genes that are not changing, the majority of your clusters will be genes that you don't care about)
+```{r}
+# To reduce the data set we can subset to genes that are highly variable using a test similar to an ANOVA test, called lrt test (likelihood ratio test: Is there any genes that have very low intra-group variation but quite a lot of in inter-group variation).
+
+# It is not giving you pairwise logical change but it is saying these genes are significantly changing at some point in the data set.
+
+# With DESeq2 we can identify genes significantly changing across groups by comparing our models with and without our groups of interest
+
+dds_Cisplatin2 <- DESeq(dds_Cisplatin, test = "LRT", reduced = ~1) # do a reduced model with the ~1
+acrossGroups_Cisplatin <- results(dds_Cisplatin2)
+acrossGroups_Cisplatin <- acrossGroups_Cisplatin[order(acrossGroups_Cisplatin$pvalue), ]
+acrossGroups_Cisplatin[1:3, ]
+# To run a LRT we must set the parameter of reduced to our alternative model of no groups.
+# The idea of comparing two models, one is no groups exist and one is considering the Cisplatin status
+```
+
+# Get review expression profile of a gene, one at a time.
+```{r}
+plotCounts(dds_Cisplatin2, gene = "129080", intgroup = "Cisplatin")
+# gene: gene of interest
+# intgroup: specify metadata column to group counts by
+
+# the gene 129080 is up-regulated in the Cisplatin_Sensitive
+```
+
+# Filter with LRT results
+```{r}
+# Clustering is done on the counts. We can subset the rlog transformed gene expression matrix to those genes significant in the LRT test.
+sigChanges_Cisplatin <- rownames(acrossGroups_Cisplatin)[acrossGroups_Cisplatin$padj < 0.05 & !is.na(acrossGroups_Cisplatin$padj)]
+
+sigMat_Cisplatin <- rlogMatrix_Cisplatin[rownames(rlogMatrix_Cisplatin) %in% sigChanges_Cisplatin, ] # This filters the ~99% of genes that are not changing across our experiment.
+
+nrow(rlogMatrix_Cisplatin)
+nrow(sigMat_Cisplatin) # the 91 genes are all significantly changing in some way across the data set.
+
+library(pheatmap)
+pheatmap(sigMat_Cisplatin, scale = "row", show_rownames = FALSE)
+# scale = "row": allow for clustering of relative changes in gene expression --> For every gene, instead of just showing the count values it does a Z-score analysis.
+
+# If just use counts to do heatmap, some of these counts are going to be thousands and others are going to be hundreds or 10. But they might actually across the groups. So by doing Z-score analysis (kind of how many standard deviation from the mean) on a per gene level it allows you to focus on trends and not absolute values.
+```
+
+# Use the clustering to derive groups of genes with similar expression patterns. Gene with similar expression profiles may share functional roles and we can use these groups to further evaluate our gene expression data.
+```{r}
+# The pheatmap package has in built methods for K means and hierarchical clustering.
+set.seed(1)
+k_Cisplatin <- pheatmap(sigMat_Cisplatin, scale = "row", kmeans_k = 7, annotation_col = phenotype_Cisplatin) # For K means we can simply provide a desired number of clusters (can check the rows of previous heat map.) to the kmeans_k parameter.
+
+# Instead of seeing every single gene at this point, you can see every single cluster and what cluster is doing.
+# Example: cluster 3 is being up in the Cisplatin_Resistant but down in the Cisplatin_Sensitive
+
+# Returns information on clustering. This is returned as a list, from which the K-means clustering the assignment of genes to clusters can be extracted.
+names(k_Cisplatin$kmeans)
+clusterDF_Cisplatin <- as.data.frame(factor(k_Cisplatin$kmeans$cluster))
+colnames(clusterDF_Cisplatin) <- "Gene_Cluster"
+clusterDF_Cisplatin[1:10, , drop = FALSE] # Every single gene with the cluster associated
+
+# Plot full heatmap highlighting the membership of genes to clusters.
+OrderByCluster_Cisplatin <- sigMat_Cisplatin[order(clusterDF_Cisplatin$Cluster), ]
+pheatmap(OrderByCluster_Cisplatin, scale = "row", annotation_row = clusterDF_Cisplatin, show_rownames = FALSE,
+    cluster_rows = FALSE, annotation_col = phenotype_Cisplatin)
+```
+
+# Identifying optimal clusters
+```{r}
+# Assess the silhoutte score at different successive cluster numbers and choose the cluster number with the highest mean silhoutte score. The Silhouette method evaluates the similarity of cluster members to the similarity between clusters. It tries to find of the most intra-cluster similarity and least inter-cluster similarity.
+library(NbClust)
+rowScaledMat_Cisplatin <- t(scale(t(sigMat_Cisplatin))) # We want to give it the scaled values (Z-scores)
+clusterNum_Cisplatin <- NbClust(rowScaledMat_Cisplatin, distance = "euclidean", min.nc = 2, max.nc = 12,
+    method = "kmeans", index = "silhouette") # min.nc & max.nc: set the min and maximum cluster numbers to try
+clusterNum_Cisplatin$Best.nc # the number of clusters best for the data
+# Depending on how deep in the patterns you want to understand on your data, 2 might not be enough. But is is not necessary you have to follow up.
+
+clusterNum_Cisplatin$Best.partition[1:10]
+
+orderedCluster_Cisplatin <- sort(clusterNum_Cisplatin$Best.partition)
+sigMat_Cisplatin2 <- sigMat_Cisplatin[match(names(orderedCluster_Cisplatin), rownames(sigMat_Cisplatin)), ]
+
+pheatmap(sigMat_Cisplatin2, scale = "row", annotation_row = clusterDF_Cisplatin, show_rownames = FALSE,
+    cluster_rows = FALSE, annotation_col = phenotype_Cisplatin)
+# We keep the row names (annotation information based on the original clustering we did with 7) but we organized it in a way that is representing new optimized clustering which has 2 clusters. We can see ther is a lot of overlap
+```
+# Final heatmap
+```{r}
+set.seed(1)
+k_Cisplatin <- pheatmap(sigMat_Cisplatin, scale = "row", kmeans_k = 2, annotation_col = phenotype_Cisplatin)
+clusterDF_Cisplatin <- as.data.frame(factor(k_Cisplatin$kmeans$cluster))
+colnames(clusterDF_Cisplatin) <- "Gene_Cluster"
+
+# Plot full heatmap highlighting the membership of genes to clusters.
+OrderByCluster_Cisplatin <- sigMat_Cisplatin[order(clusterDF_Cisplatin$Gene_Cluster), ]
+pheatmap(OrderByCluster_Cisplatin, 
+         scale = "row", 
+         annotation_row = clusterDF_Cisplatin, 
+         show_rownames = FALSE,
+         cluster_rows = TRUE, 
+         annotation_col = phenotype_Cisplatin)
+
+# Extract Gene Cluster info
+clusterDF_Cisplatin2 <- clusterDF_Cisplatin %>%
+                        rownames_to_column(var = "ENTREZID")
+sig_annotatedRes_Cisplatin2 <- sig_annotatedRes_Cisplatin %>%
+                               select(-baseMean,-lfcSE,-stat) %>%
+                               right_join(clusterDF_Cisplatin2)
+write_csv(sig_annotatedRes_Cisplatin2 ,"/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/Analysis/DEG/Cisplatin_GeneCluster_sig.csv")
+```
+
+_________________________________________________________________________
+
+# Radiation
+```{r}
+# Use rlog transformation
+rlog_Radiation <- rlog(dds_Radiation)
+rlog_Radiation
+
+# plot the mean/variance relationship
+rlogMatrix_Radiation <- assay(rlog_Radiation)
+vsn::meanSdPlot(rlogMatrix_Radiation)
+
+#################### PCA ####################
+plotPCA(rlog_Radiation, intgroup = "Radiation", ntop = nrow(rlog_Radiation))
+
+pcRes_Radiation <- prcomp(t(rlogMatrix_Radiation))
+# which genes most positively contribute to PC1.
+PC1markers_Radiation <- sort(pcRes_Radiation$rotation[, 1], decreasing = TRUE)[1:100] # top 100 markers
+PC1markers_Radiation[1:10]
+
+#################### Clustering Analysis ####################
+dds_Radiation2 <- DESeq(dds_Radiation, test = "LRT", reduced = ~1) # do a reduced model with the ~1
+acrossGroups_Radiation <- results(dds_Radiation2)
+acrossGroups_Radiation <- acrossGroups_Radiation[order(acrossGroups_Radiation$pvalue), ]
+acrossGroups_Radiation[1:3, ]
+
+# Filter with LRT results
+sigChanges_Radiation <- rownames(acrossGroups_Radiation)[acrossGroups_Radiation$padj < 0.05 & !is.na(acrossGroups_Radiation$padj)]
+sigMat_Radiation <- rlogMatrix_Radiation[rownames(rlogMatrix_Radiation) %in% sigChanges_Radiation, ] # This filters the ~98% of genes that are not changing across our experiment.
+nrow(rlogMatrix_Radiation)
+nrow(sigMat_Radiation) # 556
+
+# Identifying optimal clusters
+rowScaledMat_Radiation <- t(scale(t(sigMat_Radiation)))
+clusterNum_Radiation <- NbClust(rowScaledMat_Radiation, 
+                                distance = "euclidean", 
+                                min.nc = 2, max.nc = 12,
+                                method = "kmeans", 
+                                index = "silhouette")
+clusterNum_Radiation$Best.nc # 2
+
+# Use the clustering to derive groups of genes with similar expression patterns.
+set.seed(2)
+k_Radiation <- pheatmap(sigMat_Radiation, scale = "row", kmeans_k = 2, annotation_col = phenotype_Radiation)
+clusterDF_Radiation <- as.data.frame(factor(k_Radiation$kmeans$cluster))
+colnames(clusterDF_Radiation) <- "Gene_Cluster"
+
+# Plot full heatmap highlighting the membership of genes to clusters.
+OrderByCluster_Radiation <- sigMat_Radiation[order(clusterDF_Radiation$Gene_Cluster), ]
+pheatmap(OrderByCluster_Radiation, 
+         scale = "row", 
+         annotation_row = clusterDF_Radiation, 
+         show_rownames = FALSE,
+         cluster_rows = TRUE, 
+         annotation_col = phenotype_Radiation)
+
+# Extract Gene Cluster info
+clusterDF_Radiation2 <- clusterDF_Radiation %>%
+                        rownames_to_column(var = "ENTREZID")
+sig_annotatedRes_Radiation2 <- sig_annotatedRes_Radiation %>%
+                               select(-baseMean,-lfcSE,-stat) %>%
+                               right_join(clusterDF_Radiation2)
+write_csv(sig_annotatedRes_Radiation2 ,"/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/Analysis/DEG/Radiation_GeneCluster_sig.csv")
+```
+
+_________________________________________________________________________
+
+# CRT
+```{r}
+# Use rlog transformation
+rlog_CRT <- rlog(dds_CRT)
+rlog_CRT
+
+# plot the mean/variance relationship
+rlogMatrix_CRT <- assay(rlog_CRT)
+vsn::meanSdPlot(rlogMatrix_CRT)
+
+#################### PCA ####################
+plotPCA(rlog_CRT, intgroup = "CRT", ntop = nrow(rlog_CRT))
+
+pcRes_CRT <- prcomp(t(rlogMatrix_CRT))
+# which genes most positively contribute to PC1.
+PC1markers_CRT <- sort(pcRes_CRT$rotation[, 1], decreasing = TRUE)[1:100] # top 100 markers
+PC1markers_CRT[1:10]
+
+#################### Clustering Analysis ####################
+dds_CRT2 <- DESeq(dds_CRT, test = "LRT", reduced = ~1) # do a reduced model with the ~1
+acrossGroups_CRT <- results(dds_CRT2)
+acrossGroups_CRT <- acrossGroups_CRT[order(acrossGroups_CRT$pvalue), ]
+acrossGroups_CRT[1:3, ]
+
+# Filter with LRT results
+sigChanges_CRT <- rownames(acrossGroups_CRT)[acrossGroups_CRT$padj < 0.05 & !is.na(acrossGroups_CRT$padj)]
+sigMat_CRT <- rlogMatrix_CRT[rownames(rlogMatrix_CRT) %in% sigChanges_CRT, ] # This filters the ~99% of genes that are not changing across our experiment.
+nrow(rlogMatrix_CRT) # 31383
+nrow(sigMat_CRT) # 110
+
+# Identifying optimal clusters
+rowScaledMat_CRT <- t(scale(t(sigMat_CRT)))
+clusterNum_CRT <- NbClust(rowScaledMat_CRT, 
+                          distance = "euclidean", 
+                          min.nc = 2, max.nc = 12,
+                          method = "kmeans", 
+                          index = "silhouette")
+clusterNum_CRT$Best.nc # 2
+
+# Use the clustering to derive groups of genes with similar expression patterns.
+set.seed(3)
+k_CRT <- pheatmap(sigMat_CRT, 
+                  scale = "row", 
+                  kmeans_k = 2, 
+                  annotation_col = phenotype_CRT)
+clusterDF_CRT <- as.data.frame(factor(k_CRT$kmeans$cluster))
+colnames(clusterDF_CRT) <- "Gene_Cluster"
+
+# Plot full heatmap highlighting the membership of genes to clusters.
+OrderByCluster_CRT <- sigMat_CRT[order(clusterDF_CRT$Gene_Cluster), ]
+pheatmap(OrderByCluster_CRT, 
+         scale = "row", 
+         annotation_row = clusterDF_CRT, 
+         show_rownames = FALSE,
+         cluster_rows = TRUE, 
+         annotation_col = phenotype_CRT)
+
+# Extract Gene Cluster info
+clusterDF_CRT2 <- clusterDF_CRT %>%
+                  rownames_to_column(var = "ENTREZID")
+sig_annotatedRes_CRT2 <- sig_annotatedRes_CRT %>%
+                         select(-baseMean,-lfcSE,-stat) %>%
+                         right_join(clusterDF_CRT2)
+write_csv(sig_annotatedRes_CRT2 ,"/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/Analysis/DEG/CRT_GeneCluster_sig.csv")
+```

@@ -1,0 +1,317 @@
+---
+title: "Differential Gene Expression"
+author: "Ji-Qing Chen"
+date: "2022-10-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyr)
+library(ggsci)
+library(Rsamtools)
+library(GenomicAlignments)
+
+library(DESeq2)
+library(dplyr)
+```
+
+# Load gene counts and phenotype
+```{r}
+load("/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/PDO_drug_resistance/geneCounts.RData")
+load("/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/PDO_drug_resistance/phenotype.RData")
+phenotype
+assay(GeneCounts)[1:5,]
+```
+
+# Check where is gene
+```{r}
+# Each GRangesList element contains exons used in counting, has Entrez gene ID and is in matching order as rows in count table.
+rowRanges(GeneCounts)[1:2, ]
+```
+
+# Normalization
+```{r}
+library(DESeq2)
+# To account for technical differences in library composition, many of these approached identify scaling factors for each sample or how many reads did you sequence per sample which may be used to normalized observed/measured counts.
+
+# Both EdgeR and DESeq2 works with non-transformed count data to detect differential expression.
+
+# use the DESeqDataSetFromMatrix() function to create a DESeq2 object.
+countMatrix <- assay(GeneCounts)
+countGRanges <- rowRanges(GeneCounts)
+dds_Cisplatin <- DESeqDataSetFromMatrix(countMatrix, colData = phenotype, design = ~Cisplatin, rowRanges = countGRanges)
+dds_Radiation <- DESeqDataSetFromMatrix(countMatrix, colData = phenotype, design = ~Radiation, rowRanges = countGRanges)
+dds_CRT <- DESeqDataSetFromMatrix(countMatrix, colData = phenotype, design = ~CRT, rowRanges = countGRanges)
+
+dds_Cisplatin
+
+# Run the DESeq2 workflow on the DESeq2 object using the DESeq() function. It will normalize library sizes, estimate and shrink variance and test the data in a single step.
+# DESeq2 object is updated to include useful statistics such normalized values and variance of signal within each gene.
+dds_Cisplatin <- DESeq(dds_Cisplatin) # test default is pairwise test
+dds_Radiation <- DESeq(dds_Radiation)
+dds_CRT <- DESeq(dds_CRT)
+```
+########### Check steps in DESeq() [not necessary to do these steps] ###############
+
+# normalization (evaluating the median expression of genes across all samples to produce a per sample normalization factor (library size).)
+```{r}
+# Can retrieve normalized and unnormalized values from our DESeq2 object
+# Normalized counts (normalize to read depth) are counts divided by the library scaling factor (the median expression of genes). ---> like counts per million
+normCounts <- counts(dds_Cisplatin, normalized = TRUE)
+normCounts[1:2, ]
+```
+
+# variance estimation (estimates variances and importantly shrinks variance depending on the mean.)
+```{r}
+# Shrinking of variance allows us to detect significant changes (between genes) with low replicate number.
+plotDispEsts(dds_Cisplatin)
+
+# Black dots are the gene count estimates (they are been normalized)
+# the expected number of counts on the bottom
+# This relationship between low counts high dispersion (high variance)
+# Red: fitted line ---> the relationship or the model between the counts and the variance (dispersion)
+# Blue: final value after they have been shrunk
+```
+#################################################################################
+
+# Pairwise comparison between 2 groups
+```{r}
+# put your mutant / condition / treatment in 2nd place in contrast parameter; control / wild-type in 3rd place in contrast parameter
+# so the log2 fold change: the numerator would be the mutant/condition/treatment
+myRes_Cisplatin <- results(dds_Cisplatin, contrast = c("Cisplatin", "Cisplatin_Resistant", "Cisplatin_Sensitive"))
+myRes_Radiation <- results(dds_Radiation, contrast = c("Radiation", "Radiation_Resistant", "Radiation_Sensitive"))
+myRes_CRT <- results(dds_CRT, contrast = c("CRT", "CRT_Resistant", "CRT_Sensitive"))
+# arranged by p value so we have the most interesting gene at the top
+myRes_Cisplatin <- myRes_Cisplatin[order(myRes_Cisplatin$pvalue), ]
+myRes_Radiation <- myRes_Radiation[order(myRes_Radiation$pvalue), ]
+myRes_CRT <- myRes_CRT[order(myRes_CRT$pvalue), ]
+myRes_Cisplatin[1:3, ]
+# baseMean: average gene counts across all samples / experiments
+# padj: FDR
+
+summary(myRes_Cisplatin)
+```
+
+# Review the relationship between fold-changes and expression levels with a MA-Plot
+```{r}
+plotMA(myRes_Cisplatin)
+# Blue: significant
+```
+
+# Downweight genes with high fold change but low significance (due to low counts/high dispersion) -- such as little triangles in the above MA-Plot [However those genes are the regions that we don't care about because of low counts]
+```{r}
+# penalize genes that are low significance but high log2 fold change
+myRes_Cisplatin_lfc <- lfcShrink(dds_Cisplatin, coef = "Cisplatin_Cisplatin_Sensitive_vs_Cisplatin_Resistant")
+DESeq2::plotMA(myRes_Cisplatin_lfc)
+# less shape like a pear
+
+# This allows us to now use the log2FC as a measure (it is been scaled and augmented by the significance) of significance of change in our ranking for analysis and in programs such as GSEA. Before that we wouldn't use it for GSEA
+```
+# Convert to data frame
+```{r}
+myRes_Cisplatin_AsDF <- as.data.frame(myRes_Cisplatin)
+myRes_Radiation_AsDF <- as.data.frame(myRes_Radiation)
+myRes_CRT_AsDF <- as.data.frame(myRes_CRT)
+
+myRes_Cisplatin_AsDF[1:2, ]
+
+# DEseq2 filters out low expressed/count values genes to assist in multiple testing correction. This results in NA values in padj column for low expressed genes. (It wants to remove as much as many genes as possible before you do multiple testing). If a gene has an NA that means it wasn't considered for multiple testing.
+table(is.na(myRes_Cisplatin_AsDF$padj))
+
+# Genes with NA padj values should be filtered from the table for later evaluation and functional testing.
+myRes_Cisplatin_AsDF <- myRes_Cisplatin_AsDF[!is.na(myRes_Cisplatin_AsDF$padj), ] # doing a filtration based on if NA
+myRes_Radiation_AsDF <- myRes_Radiation_AsDF[!is.na(myRes_Radiation_AsDF$padj), ]
+myRes_CRT_AsDF <- myRes_CRT_AsDF[!is.na(myRes_CRT_AsDF$padj), ]
+
+myRes_Cisplatin_AsDF <- myRes_Cisplatin_AsDF[order(myRes_Cisplatin_AsDF$pvalue), ]
+myRes_Radiation_AsDF <- myRes_Radiation_AsDF[order(myRes_Radiation_AsDF$pvalue), ]
+myRes_CRT_AsDF <- myRes_CRT_AsDF[order(myRes_CRT_AsDF$pvalue), ]
+
+myRes_Cisplatin_AsDF[1:3, ]
+```
+
+# Adding annotation
+```{r}
+# Use the org.db packages to retrieve Gene Symbols for Entrez IDs
+library(org.Hs.eg.db) # human specific organism and annotation database
+eToSym_Cisplatin <- select(org.Hs.eg.db,
+                 keys = rownames(myRes_Cisplatin_AsDF),
+                 keytype = "ENTREZID",
+                 columns="SYMBOL")
+eToSym_Radiation <- select(org.Hs.eg.db,
+                 keys = rownames(myRes_Radiation_AsDF),
+                 keytype = "ENTREZID",
+                 columns="SYMBOL")
+eToSym_CRT <- select(org.Hs.eg.db,
+              keys = rownames(myRes_CRT_AsDF),
+              keytype = "ENTREZID",
+              columns="SYMBOL")
+
+eToSym_Cisplatin[1:10,]
+
+# Merge the Entrez ID to Symbol table into the table of differential expression results.
+annotatedRes_Cisplatin <- merge(eToSym_Cisplatin, myRes_Cisplatin_AsDF, # x = eToSym_Cisplatin; y = myRes_Cisplatin_AsDF
+                                by.x=1, # the column that we are interested in is column one (eToSym_Cisplatin$ENTREZID)
+                                by.y=0, # row names of myRes_Cisplatin_AsDF
+                                all.x=FALSE,
+                                all.y=TRUE) # we want to keep every single result we got even if they couldn't find the name of the gene in the database
+annotatedRes_Radiation <- merge(eToSym_Radiation, myRes_Radiation_AsDF,
+                                by.x=1,
+                                by.y=0,
+                                all.x=FALSE,
+                                all.y=TRUE)
+annotatedRes_CRT <- merge(eToSym_CRT, myRes_CRT_AsDF,
+                          by.x=1,
+                          by.y=0,
+                          all.x=FALSE,
+                          all.y=TRUE)
+
+annotatedRes_Cisplatin <- annotatedRes_Cisplatin[order(annotatedRes_Cisplatin$pvalue),]
+annotatedRes_Radiation <- annotatedRes_Radiation[order(annotatedRes_Radiation$pvalue),]
+annotatedRes_CRT <- annotatedRes_CRT[order(annotatedRes_CRT$pvalue),]
+
+annotatedRes_Cisplatin[1:3,]
+```
+
+# extract genes are significantly regulated in different conditions.
+```{r}
+# Cisplatin
+sig_Cisplatin <- annotatedRes_Cisplatin$padj < 0.05
+sig_annotatedRes_Cisplatin <- annotatedRes_Cisplatin[sig_Cisplatin, ]
+
+# Radiation
+sig_Radiation <- annotatedRes_Radiation$padj < 0.05
+sig_annotatedRes_Radiation <- annotatedRes_Radiation[sig_Radiation, ]
+
+# CRT
+sig_CRT <- annotatedRes_CRT$padj < 0.05
+sig_annotatedRes_CRT <- annotatedRes_CRT[sig_CRT, ]
+
+sig_annotatedRes_Cisplatin[1:2, ]
+```
+
+# Save
+```{r}
+save(dds_Cisplatin, dds_CRT, dds_Radiation, annotatedRes_Cisplatin, annotatedRes_Radiation, annotatedRes_CRT, sig_annotatedRes_Cisplatin, sig_annotatedRes_CRT, sig_annotatedRes_Radiation, file = "/Users/chenjiqing/Public/RNA-seq/Exome_and_organoid/DGE.RData")
+```
+
+________________________________________________________________
+
+# Plot
+
+# Function
+```{r}
+plot.volcano <- function(DF, range.x.y, title){
+  DF2 <- DF %>% mutate(color = ifelse(padj <= 0.05 & log2FoldChange > 0, "Up-Regulated",
+                                      ifelse(padj <= 0.05 & log2FoldChange < 0, "Down-Regulated",
+                                             "Not Significant")))
+  p = as.data.frame(DF2) %>%
+        ggplot(aes(x=log2FoldChange, y=-log10(pvalue))) +
+          geom_point(aes(color=color), shape=19, size = 1) +
+          scale_color_manual(values=c("dodgerblue", "gray", "firebrick")) +
+          xlim(c(-range.x.y[1], range.x.y[1])) +
+          ylim(c(0, -log10(range.x.y[2]))) +
+          geom_hline(yintercept=-log10(0.05)) +
+          geom_vline(xintercept=c(-1,1)) +
+          theme_classic(base_size = 15) +
+          labs(x="log2FC (fold change)", y="-log10(p-value)", title = title, color = "") +
+          theme(plot.title = element_text(size=16),
+                legend.text=element_text(size=10)) +
+          scale_x_continuous(breaks=c(-20,-10, -1, 0, 1, 10, 20))
+          
+  print(p)
+}
+```
+
+# Cisplatin
+```{r}
+range.x.y = c(0,1)
+range.x.y[1] = max(abs(annotatedRes_Cisplatin$log2FoldChange))
+range.x.y[2] = min(annotatedRes_Cisplatin$pvalue)
+
+plot.volcano(annotatedRes_Cisplatin, range.x.y, "Cisplatin_Resistant vs Cisplatin_Sensitive") # 1000 x 800
+```
+
+# Radiation
+```{r}
+range.x.y = c(0,1)
+range.x.y[1] = max(abs(annotatedRes_Radiation$log2FoldChange))
+range.x.y[2] = min(annotatedRes_Radiation$pvalue)
+
+plot.volcano(annotatedRes_Radiation, range.x.y, "Radiation_Resistant vs Radiation_Sensitive") # 1000 x 800
+```
+
+# CRT
+```{r}
+range.x.y = c(0,1)
+range.x.y[1] = max(abs(annotatedRes_CRT$log2FoldChange))
+range.x.y[2] = min(annotatedRes_CRT$pvalue)
+
+plot.volcano(annotatedRes_CRT, range.x.y, "CRT_Resistant vs CRT_Sensitive") # 1000 x 800
+```
+
+########### Plot Normalized counts (normalize to read depth) boxplots of top 15 genes ##########
+
+# Cisplatin
+```{r}
+normCounts_Cisplatin <- counts(dds_Cisplatin, normalized = TRUE)
+Top_sig_Cisplatin <- sig_annotatedRes_Cisplatin[1:15,]
+Top_sig_Cisplatin_ID <- as.character(Top_sig_Cisplatin$ENTREZID)
+Top_sig_Cisplatin_Name <- as.character(Top_sig_Cisplatin$SYMBOL)
+Top_normCounts_Cisplatin <- normCounts_Cisplatin[Top_sig_Cisplatin_ID,]
+rownames(Top_normCounts_Cisplatin) <- Top_sig_Cisplatin_Name
+Top_normCounts_Cisplatin <- as.data.frame(t(Top_normCounts_Cisplatin))
+Top_normCounts_Cisplatin$Cisplatin = phenotype$Cisplatin
+
+Top_normCounts_Cisplatin2 <- gather(Top_normCounts_Cisplatin, key = Gene, value = Normalized_Counts, 1:15, factor_key = T)
+
+Top_normCounts_Cisplatin2 %>%
+  ggplot(aes(x = Cisplatin, y = Normalized_Counts, fill = Cisplatin)) +
+  geom_boxplot() +
+  facet_wrap(vars(Gene), scales = "free", ncol = 5) +
+  theme_classic() +
+  scale_color_nejm() # 2000 x 800
+```
+
+# Radiation
+```{r}
+normCounts_Radiation <- counts(dds_Radiation, normalized = TRUE)
+Top_sig_Radiation <- sig_annotatedRes_Radiation[1:15,]
+Top_sig_Radiation_ID <- as.character(Top_sig_Radiation$ENTREZID)
+Top_sig_Radiation_Name <- as.character(Top_sig_Radiation$SYMBOL)
+Top_normCounts_Radiation <- normCounts_Radiation[Top_sig_Radiation_ID,]
+rownames(Top_normCounts_Radiation) <- Top_sig_Radiation_Name
+Top_normCounts_Radiation <- as.data.frame(t(Top_normCounts_Radiation))
+Top_normCounts_Radiation$Radiation <- phenotype$Radiation
+
+Top_normCounts_Radiation2 <- gather(Top_normCounts_Radiation, key = Gene, value = Normalized_Counts, 1:15, factor_key = T)
+
+Top_normCounts_Radiation2 %>%
+  ggplot(aes(x = Radiation, y = Normalized_Counts, fill = Radiation)) +
+  geom_boxplot() +
+  facet_wrap(vars(Gene), scales = "free", ncol = 5) +
+  theme_classic() +
+  scale_color_nejm()
+```
+
+# CRT
+```{r}
+normCounts_CRT <- counts(dds_CRT, normalized = TRUE)
+Top_sig_CRT <- sig_annotatedRes_CRT[1:15,]
+Top_sig_CRT_ID <- as.character(Top_sig_CRT$ENTREZID)
+Top_sig_CRT_Name <- as.character(Top_sig_CRT$SYMBOL)
+Top_normCounts_CRT <- normCounts_CRT[Top_sig_CRT_ID,]
+rownames(Top_normCounts_CRT) <- Top_sig_CRT_Name
+Top_normCounts_CRT <- as.data.frame(t(Top_normCounts_CRT))
+Top_normCounts_CRT$CRT = phenotype$CRT
+
+Top_normCounts_CRT2 <- gather(Top_normCounts_CRT, key = Gene, value = Normalized_Counts, 1:15, factor_key = T)
+
+Top_normCounts_CRT2 %>%
+  ggplot(aes(x = CRT, y = Normalized_Counts, fill = CRT)) +
+  geom_boxplot() +
+  facet_wrap(vars(Gene), scales = "free", ncol = 5) +
+  theme_classic() +
+  scale_color_nejm() # 2000 x 800
+```
