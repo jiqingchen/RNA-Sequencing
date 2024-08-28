@@ -51,11 +51,13 @@ cd /dartfs/rc/nosnapshots/V/VaickusL-nb/EDIT_Students/users/JiQing/Bulk_RNAseq_p
 
 # Download fastq files
 ```{r}
-cd /dartfs/rc/nosnapshots/V/VaickusL-nb/EDIT_Students/users/JiQing/Bulk_RNAseq_practice
+cd /dartfs/rc/nosnapshots/V/VaickusL-nb/EDIT_Students/users/JiQing/Bulk_RNAseq_practice/fastq # setting to store directory
 
 # Download Single-end reads
-sratoolkit.3.1.1-centos_linux64/bin/fasterq-dump SRRxxxxxxx
+/dartfs/rc/nosnapshots/V/VaickusL-nb/EDIT_Students/users/JiQing/Bulk_RNAseq_practice/sratoolkit.3.1.1-centos_linux64/bin/fasterq-dump SRRxxxxxxx # for fastq
 
 # Download Paired-end reads
-sratoolkit.3.1.1-centos_linux64/bin/fasterq-dump --split-files SRR1039508
+/dartfs/rc/nosnapshots/V/VaickusL-nb/EDIT_Students/users/JiQing/Bulk_RNAseq_practice/sratoolkit.3.1.1-centos_linux64/bin/fasterq-dump --split-files SRR1039509 # for fastq
+
+/dartfs/rc/nosnapshots/V/VaickusL-nb/EDIT_Students/users/JiQing/Bulk_RNAseq_practice/sratoolkit.3.1.1-centos_linux64/bin/fastq-dump --gzip --split-files SRR1039512 # for fastq.gz
 ```
