@@ -1,0 +1,61 @@
+---
+title: "SRA_Tools_Download"
+author: "Ji-Qing Chen"
+date: "2024-08-28"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Login System
+```{bash}
+ssh f0034wq@discovery8 -L 5045:localhost:5045
+
+cd /dartfs/rc/nosnapshots/V/VaickusL-nb/EDIT_Students/users/JiQing/Bulk_RNAseq_practice/fastq
+
+# Determining my current environment
+conda info --envs
+conda env list
+
+# Activate Environment
+conda activate mytest
+
+# Check what kind of packages in the environment
+conda list
+```
+
+# Download SRA-Tools
+```{r}
+# From Here!!
+https://github.com/ncbi/sra-tools/wiki/01.-Downloading-SRA-Toolkit
+# For Dartmouth Discovery: sratoolkit.3.1.1-centos_linux64.tar.gz
+# get sratoolkit.3.1.1-mac-x86_64.tar.gz
+
+# Unzip
+tar -xvzf sratoolkit.3.1.1-centos_linux64.tar.gz
+```
+
+# Configure SRA Toolkit
+```{r}
+cd /dartfs/rc/nosnapshots/V/VaickusL-nb/EDIT_Students/users/JiQing/Bulk_RNAseq_practice/sratoolkit.3.1.1-centos_linux64/bin
+
+# Enter Config Setting System
+./vdb-config -i
+# Make Sure: Main -> Enable Remote Access
+# Make Sure: Cache -> "enable local file-caching" is selected
+# Go to Cache -> "location of user-repository" -> choose the directory that you are going to store fastq files
+# exit and save the changes
+```
+
+# Download fastq files
+```{r}
+cd /dartfs/rc/nosnapshots/V/VaickusL-nb/EDIT_Students/users/JiQing/Bulk_RNAseq_practice
+
+# Download Single-end reads
+sratoolkit.3.1.1-centos_linux64/bin/fasterq-dump SRRxxxxxxx
+
+# Download Paired-end reads
+sratoolkit.3.1.1-centos_linux64/bin/fasterq-dump --split-files SRR1039508
+```
